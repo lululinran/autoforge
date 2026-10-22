@@ -49,7 +49,7 @@ autoforge fix ./some_project                                # 判卷+修复（�
 |---|---|
 | 0 | all_green——验收通过 |
 | 1 | max_rounds_exhausted——轮数用尽仍有失败 |
-| 2 | 前置失败——输入目录不存在 |
+| 2 | 前置失败——输入目录不存在 / 配置缺失 |
 | 3 | fixer_error——修复调用失败 |
 | 4 | budget_exhausted——token 预算用尽 |
 | 5 | generation_failed——生成失败 |
