@@ -3,6 +3,7 @@
 import json
 
 from autoforge import cli
+from autoforge.generator import GenerationResult
 
 
 def test_discover_entry_main_py(tmp_path):
@@ -115,3 +116,40 @@ def test_cmd_run_generation_failed_returns_5(tmp_path, monkeypatch):
     assert final["status"] == "generation_failed"
     assert "api 500" in final["error"]  # 顶层 error 字段标准化
     assert "api 500" in final["generate"]["error"]  # 细节仍保留
+
+
+def test_cmd_run_pre_deducts_generation_budget(tmp_path, monkeypatch):
+    """run 预扣生成 token：修复阶段预算 = budget - 生成用量(1000P+500C)，下限 0。"""
+    monkeypatch.chdir(tmp_path)
+
+    class FakeFixer:
+        def __init__(self, client):
+            pass
+
+    class FakeClient:
+        def __init__(self):
+            self.events = []
+
+    captured = []
+
+    def fake_loop(*a, **kw):
+        captured.append(kw)
+        return {"status": "all_green", "rounds": [], "token_total": {}}
+
+    monkeypatch.setattr(cli, "load_config",
+                        lambda *a, **k: {"api_key": "k", "base_url": "http://x",
+                                         "model": "fake"})
+    monkeypatch.setattr(cli, "LLMClient", lambda *a, **k: FakeClient())
+    monkeypatch.setattr(cli, "generate_oneshot",
+                        lambda idea, client: GenerationResult(
+                            files={"main.py": "pass\n"}, strategy="oneshot",
+                            usage={"prompt_tokens": 1000,
+                                   "completion_tokens": 500},
+                            degraded=False))
+    monkeypatch.setattr(cli, "LLMFixer", FakeFixer)
+    monkeypatch.setattr(cli, "run_loop_structured", fake_loop)
+
+    assert cli.main(["run", "idea", "--budget-tokens", "1200"]) == 0
+    assert cli.main(["run", "idea", "--budget-tokens", "5000"]) == 0
+    # 生成 1500 token 预扣：1200-1500 截断为 0；5000-1500=3500
+    assert [c["budget_tokens"] for c in captured] == [0, 3500]

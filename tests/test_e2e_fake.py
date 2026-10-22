@@ -12,7 +12,18 @@ import pytest
 from autoforge import cli
 from tests.test_llm import FakeResponse, FakeTransport
 
-docker_available = shutil.which("docker") is not None
+def _docker_available() -> bool:
+    if not shutil.which("docker"):
+        return False
+    try:
+        import docker
+        docker.from_env(timeout=5).ping()
+        return True
+    except Exception:
+        return False
+
+
+docker_available = _docker_available()
 
 GEN_FILES = {
     "files": [
@@ -67,7 +78,7 @@ def test_run_end_to_end_with_fake_llm(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "load_config",
                         lambda *a, **k: {"api_key": "k", "base_url": "http://x",
                                          "model": "fake"})
-    monkeypatch.setattr(cli, "LLMClient", lambda **k: CfgClient())
+    monkeypatch.setattr(cli, "LLMClient", lambda *a, **k: CfgClient())
 
     code = cli.main(["run", "一个加法 CLI", "--max-rounds", "2",
                      "--budget-tokens", "100000"])
@@ -77,8 +88,11 @@ def test_run_end_to_end_with_fake_llm(tmp_path, monkeypatch):
     final = json.loads(report_path.read_text(encoding="utf-8"))
     assert final["status"] == "all_green"
     assert len(final["rounds"]) == 2
+    assert final["entry_cmd"] == "python main.py --help"
     assert final["rounds"][0]["pytest_failed"] >= 1
+    assert final["rounds"][0]["smoke_exit"] == 0
     assert final["rounds"][1]["pytest_failed"] == 0
+    assert final["rounds"][1]["smoke_exit"] == 0
     assert final["rounds"][0]["applied_patches"] == ["main.py"]
     assert final["generate"]["strategy"] == "oneshot"
     # token 账本：生成 100/50 + 修复 100/50（fake usage），预扣后进入闭环

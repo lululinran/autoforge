@@ -38,6 +38,8 @@ class FakeCompletions:
 
     def create(self, **kw):
         self.calls.append(kw)
+        if not self._responses:
+            raise AssertionError("FakeTransport 剧本耗尽：管线发起了未预期的额外 LLM 调用")
         return self._responses.pop(0)
 
 
