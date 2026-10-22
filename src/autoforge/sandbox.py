@@ -248,7 +248,7 @@ def build_report(stdout: str, stderr: str, exit_code: int, duration: float,
         "stdout": stdout,
         "stderr": stderr,
         "duration": round(duration, 2),
-        # ---- 以下为 Phase 2 扩展字段（schemas.TestReport 同样带）----
+        # ---- 以下为修复闭环扩展字段（schemas.TestReport 同样带）----
         "exit_code": exit_code,
         "timed_out": timed_out,
     }

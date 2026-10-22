@@ -77,6 +77,8 @@ def coerce_patch_list(obj: Any) -> PatchList:
     if not all(isinstance(f, dict) for f in files):
         raise ValueError(f"files 列表元素必须是对象: {str(files)[:200]}")
     patches = PatchList(files=[FilePatch(**f) for f in files])
-    if len({p.path for p in patches.files}) != len(patches.files):
-        raise ValueError(f"输出包含重复路径: {sorted(p.path for p in patches.files)[:20]}")
+    paths = [p.path for p in patches.files]
+    dups = sorted({p for p in paths if paths.count(p) > 1})
+    if dups:
+        raise ValueError(f"输出包含重复路径: {dups[:20]}")
     return patches

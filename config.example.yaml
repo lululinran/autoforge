@@ -1,0 +1,5 @@
+# 复制到 ~/.autoforge/config.yaml（或设 AUTOFORGE_CONFIG 指向本文件）
+llm:
+  api_key: sk-xxxx
+  base_url: https://your-openai-compatible-relay.example/v1
+  model: deepseek-v4-flash

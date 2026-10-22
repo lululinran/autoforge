@@ -6,3 +6,6 @@ __pycache__/
 .wheels/
 runs/
 eval_results/
+dist/
+build/
+.DS_Store
