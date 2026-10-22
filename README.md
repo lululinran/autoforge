@@ -4,7 +4,7 @@
 
 **设计哲学：不做更强的生成，做更硬的验证。** LLM 生成的代码不可信，
 所以确定性放在验证侧——每个产物都要在禁网 Docker 沙箱里过
-pytest + 入口冒烟，失败结构化回传 LLM 迭代修复，直到全绿或预算耗尽。
+pytest + 入口冒烟，失败结构化回传 LLM 迭代修复，直到全绿、或预算/轮数耗尽。
 
 ```
 需求 ─[生成]→ 项目文件 ─→ 禁网沙箱判卷（pytest + 入口冒烟）
@@ -34,7 +34,8 @@ autoforge fix ./some_project                                # 判卷+修复（�
 ```
 
 常用参数：`--max-rounds`（默认 3）、`--budget-tokens`（默认 300k，生成+修复全链路共享，
-生成段预扣）、`--model`、`--timeout`（沙箱单命令秒数）。
+生成段预扣）、`--model`、`--timeout`（沙箱单命令秒数）、`--entry`（覆盖入口冒烟命令）、
+`--config`（配置文件路径，默认 `~/.autoforge/config.yaml`）。
 
 会话产物落 `runs/<时间戳>/`：`workspace/`（生成项目）、`generation/events.json`、
 `rounds/round-N.json`（每轮判卷与补丁）、`events.json`（全链路 LLM 调用事件）、
@@ -42,15 +43,20 @@ autoforge fix ./some_project                                # 判卷+修复（�
 
 ## 退出码
 
+`run` / `fix` 状态退出码：
+
 | 码 | 含义 |
 |---|---|
 | 0 | all_green——验收通过 |
 | 1 | max_rounds_exhausted——轮数用尽仍有失败 |
-| 2 | 前置失败——目录不存在 / 沙箱不可用 |
+| 2 | 前置失败——输入目录不存在 |
 | 3 | fixer_error——修复调用失败 |
 | 4 | budget_exhausted——token 预算用尽 |
 | 5 | generation_failed——生成失败 |
-| 6 | loop_error——闭环执行异常 |
+| 6 | loop_error——闭环执行异常（含沙箱不可用） |
+
+`judge` 单独一档：0 = 判卷完成（结果看输出/`--json`，测试失败也算"完成"，
+沿用"捕获即成功"语义）、1 = pytest 超时、2 = 目录不存在/沙箱不可用。
 
 ## 测试
 
