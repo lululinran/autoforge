@@ -9,7 +9,7 @@ from tests.test_llm import FakeResponse, make_client
 
 
 def test_system_prompt_states_hard_constraints():
-    for kw in ("标准库", "pytest", "--help", "完整"):
+    for kw in ("标准库", "pytest", "--help", "完整", "扁平", "3.11"):
         assert kw in GENERATION_SYSTEM_PROMPT
 
 
@@ -34,11 +34,33 @@ def test_generate_oneshot_accepts_bare_list():
 
 def test_generate_oneshot_unsafe_path_rejected():
     c = make_client([FakeResponse(json.dumps({"files": [{"path": "../evil.py", "content": "x"}]}))])
-    with pytest.raises(Exception, match="安全的仓库相对路径"):
+    with pytest.raises(ValueError, match="安全的仓库相对路径"):
         generate_oneshot("idea", c)
 
 
 def test_generate_oneshot_missing_files_key():
     c = make_client([FakeResponse('{"nope": 1}')])
     with pytest.raises(ValueError, match="files"):
+        generate_oneshot("idea", c)
+
+
+def test_generate_oneshot_empty_files_rejected():
+    c = make_client([FakeResponse(json.dumps({"files": []}))])
+    with pytest.raises(ValueError, match="为空"):
+        generate_oneshot("idea", c)
+
+
+def test_generate_oneshot_non_dict_entry_rejected():
+    c = make_client([FakeResponse(json.dumps({"files": ["main.py"]}))])
+    with pytest.raises(ValueError, match="必须是对象"):
+        generate_oneshot("idea", c)
+
+
+def test_generate_oneshot_duplicate_paths_rejected():
+    payload = {"files": [
+        {"path": "main.py", "content": "x = 1"},
+        {"path": "main.py", "content": "x = 2"},
+    ]}
+    c = make_client([FakeResponse(json.dumps(payload))])
+    with pytest.raises(ValueError, match="重复路径"):
         generate_oneshot("idea", c)

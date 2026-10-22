@@ -17,11 +17,12 @@ GENERATION_SYSTEM_PROMPT = """你是资深 Python 工程师，从零构建一个
 只输出严格 JSON（不带 markdown 围栏、不带任何解释文字），格式：
 {"files": [{"path": "相对路径", "content": "完整文件内容"}]}
 硬性要求：
-1. 仅使用 Python 标准库。运行环境禁网、无法安装第三方包；测试框架只用 pytest。
+1. 仅使用 Python 标准库。运行环境禁网、无法安装第三方包；测试框架只用 pytest。目标 Python 版本 3.11（沙箱运行环境）。
 2. 必须包含 pytest 测试文件（test_*.py），每个核心行为至少一个用例；测试不得联网、不得读写项目外路径。
 3. 入口模块必须支持 `python <入口> --help` 且正常退出（退出码 0）。
 4. content 必须是该文件的完整最终内容（可直接运行），禁止省略、占位符或"其余不变"。
-5. 只输出本项目需要的文件，遵守合理的模块划分。
+5. 按职责把代码拆成根目录下的多个模块文件，只输出本项目需要的文件。
+6. 项目采用扁平布局：所有 .py 文件（含入口与测试）平铺在项目根目录，不创建子目录或包；测试用 from <模块名> import ... 导入，入口用 python <入口>.py --help 验证。
 """
 
 
@@ -38,7 +39,14 @@ def _coerce_patches(obj: Any) -> PatchList:
     files = obj.get("files") if isinstance(obj, dict) else obj
     if not isinstance(files, list):
         raise ValueError(f"生成输出缺少可用的 files 列表: {str(obj)[:200]}")
-    return PatchList(files=[FilePatch(**f) for f in files])
+    if not files:
+        raise ValueError(f"生成输出 files 列表为空: {str(obj)[:200]}")
+    if not all(isinstance(f, dict) for f in files):
+        raise ValueError(f"files 列表元素必须是对象: {str(files)[:200]}")
+    patches = PatchList(files=[FilePatch(**f) for f in files])
+    if len({p.path for p in patches.files}) != len(patches.files):
+        raise ValueError(f"生成输出包含重复路径: {sorted(p.path for p in patches.files)[:20]}")
+    return patches
 
 
 def generate_oneshot(idea: str, client: LLMClient) -> GenerationResult:
