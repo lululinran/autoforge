@@ -19,7 +19,7 @@ from pathlib import Path
 from autoforge.generator import generate_oneshot
 from autoforge.llm import LLMClient, load_config
 from autoforge.loop import LLMFixer, apply_patches, run_loop_structured
-from autoforge.sandbox import print_report, run_pytest_in_sandbox
+from autoforge.sandbox import print_report, run_in_sandbox, run_pytest_in_sandbox
 from autoforge.schemas import FilePatch, PatchList
 
 RUNS_ROOT = Path("runs")  # 相对当前目录；由 create_run_dir 建在仓库根
@@ -36,11 +36,12 @@ def create_run_dir() -> Path:
 
 
 def discover_entry(project_dir: Path) -> str | None:
-    """自动探测入口：优先 main.py / cli.py，用 `python <入口> --help` 冒烟。
+    """自动探测入口：根 main.py 优先，再嵌套 main.py / cli.py / __main__.py。
 
     路径经 shlex.quote：文件名来自 LLM 产物，不允许注入冒烟命令。
     """
-    for pat in ("*/main.py", "main.py", "*/cli.py", "*/__main__.py"):
+    for pat in ("main.py", "*/main.py", "cli.py", "*/cli.py",
+                "__main__.py", "*/__main__.py"):
         hits = sorted(p for p in project_dir.glob(pat) if "__pycache__" not in p.parts)
         if hits:
             rel = hits[0].relative_to(project_dir).as_posix()
@@ -63,7 +64,7 @@ def human_summary(final: dict) -> str:
                 f" 冒烟 exit={r['smoke_exit']}")
         if r.get("applied_patches"):
             line += f" → 修复 {r['applied_patches']}"
-        if r["pytest_failed"] == 0 and r["smoke_exit"] == 0:
+        if r["pytest_failed"] == 0 and r["smoke_exit"] in (0, None):
             line += " ✅"
         lines.append(line)
     lines.append(f"会话: {final['session_dir']}")
@@ -82,6 +83,33 @@ def _dump_events(session_dir: Path, client) -> None:
         encoding="utf-8")
 
 
+def _loop_error_exit(session_dir: Path, client, base: dict, exc: Exception) -> int:
+    """闭环阶段异常的统一出口：events 落盘 + loop_error 报告 + exit 6。"""
+    print(f"[autoforge] ❌ 闭环异常: {exc}", file=sys.stderr)
+    _dump_events(session_dir, client)
+    final = {**base, "status": "loop_error", "error": str(exc),
+             "session_dir": str(session_dir), "rounds": [], "token_total": {}}
+    _write_report(session_dir, final)
+    print(f"[autoforge] 报告: {session_dir / 'autoforge_report.json'}")
+    return STATUS_EXIT["loop_error"]
+
+
+def _run_and_finalize(session_dir: Path, client, base: dict, workdir: Path,
+                      entry: str | None, max_rounds: int, fixer: LLMFixer,
+                      budget_tokens: int, timeout: int) -> int:
+    """判卷+修复闭环与收尾（run/fix 共用）：loop_error 容错、events/报告落盘、人读汇总。"""
+    try:
+        result = run_loop_structured(session_dir, workdir, entry, max_rounds, fixer,
+                                     budget_tokens=budget_tokens, timeout=timeout)
+    except Exception as exc:
+        return _loop_error_exit(session_dir, client, base, exc)
+    _dump_events(session_dir, client)
+    final = {**base, **result, "session_dir": str(session_dir)}
+    _write_report(session_dir, final)
+    print(human_summary(final))
+    return STATUS_EXIT.get(final["status"], 1)
+
+
 def cmd_run(args) -> int:
     cfg = load_config(args.config, args.model)
     client = LLMClient(api_key=cfg["api_key"], base_url=cfg["base_url"], model=cfg["model"])
@@ -97,42 +125,35 @@ def cmd_run(args) -> int:
         print(f"[autoforge] ❌ 生成失败: {exc}", file=sys.stderr)
         _dump_events(session_dir, client)
         final = {"idea": args.idea, "model": cfg["model"], "generate": {"error": str(exc)},
-                 "entry_cmd": None, "status": "generation_failed",
+                 "error": str(exc), "entry_cmd": None, "status": "generation_failed",
                  "session_dir": str(session_dir), "rounds": [], "token_total": {}}
         _write_report(session_dir, final)
+        print(f"[autoforge] 报告: {session_dir / 'autoforge_report.json'}")
         return STATUS_EXIT["generation_failed"]
     (session_dir / "generation").mkdir(exist_ok=True)
     (session_dir / "generation" / "events.json").write_text(
         json.dumps(list(client.events), ensure_ascii=False, indent=2), encoding="utf-8")
-    apply_patches(workspace, PatchList(
-        files=[FilePatch(path=p, content=c) for p, c in gen.files.items()]))
     gen_summary = {"strategy": gen.strategy, "duration_s": round(time.time() - start, 1),
                    "usage": gen.usage, "degraded": gen.degraded}
     print(f"[autoforge] 生成 {len(gen.files)} 个文件: {sorted(gen.files)}")
 
+    try:
+        apply_patches(workspace, PatchList(
+            files=[FilePatch(path=p, content=c) for p, c in gen.files.items()]))
+    except Exception as exc:
+        return _loop_error_exit(session_dir, client,
+                                {"idea": args.idea, "model": cfg["model"],
+                                 "generate": gen_summary, "entry_cmd": None}, exc)
     entry = args.entry or discover_entry(workspace)
     print(f"[autoforge] 冒烟命令: {entry or '（未探测到入口，跳过冒烟）'}")
 
     gen_tokens = gen.usage.get("prompt_tokens", 0) + gen.usage.get("completion_tokens", 0)
     remaining = max(args.budget_tokens - gen_tokens, 0)
-    try:
-        result = run_loop_structured(session_dir, workspace, entry, args.max_rounds,
-                                     LLMFixer(client), budget_tokens=remaining,
-                                     timeout=args.timeout)
-    except Exception as exc:
-        print(f"[autoforge] ❌ 闭环异常: {exc}", file=sys.stderr)
-        _dump_events(session_dir, client)
-        final = {"idea": args.idea, "model": cfg["model"], "generate": gen_summary,
-                 "entry_cmd": entry, "status": "loop_error", "error": str(exc),
-                 "session_dir": str(session_dir), "rounds": [], "token_total": {}}
-        _write_report(session_dir, final)
-        return STATUS_EXIT["loop_error"]
-    _dump_events(session_dir, client)
-    final = {"idea": args.idea, "model": cfg["model"], "generate": gen_summary,
-             "entry_cmd": entry, **result, "session_dir": str(session_dir)}
-    _write_report(session_dir, final)
-    print(human_summary(final))
-    return STATUS_EXIT.get(final["status"], 1)
+    base = {"idea": args.idea, "model": cfg["model"], "generate": gen_summary,
+            "entry_cmd": entry}
+    return _run_and_finalize(session_dir, client, base, workspace, entry,
+                             args.max_rounds, LLMFixer(client), budget_tokens=remaining,
+                             timeout=args.timeout)
 
 
 def cmd_judge(args) -> int:
@@ -141,12 +162,25 @@ def cmd_judge(args) -> int:
         print(f"[autoforge] 目录不存在: {target}", file=sys.stderr)
         return 2
     entry = args.entry or discover_entry(target)
-    report = run_pytest_in_sandbox(target, timeout=args.timeout)
+    print(f"[autoforge] 冒烟命令: {entry or '（未探测到，跳过）'}")
+    try:
+        report = run_pytest_in_sandbox(target, timeout=args.timeout)
+        smoke = {"entry": entry, "exit_code": None, "timed_out": None}
+        if entry is not None:
+            res = run_in_sandbox(target, entry, timeout=args.timeout)
+            smoke = {"entry": entry, "exit_code": res["exit_code"],
+                     "timed_out": res["timed_out"]}
+            head = "\n".join(res["stdout"].splitlines()[:5])
+            print(f"[autoforge] 冒烟 exit={smoke['exit_code']}"
+                  + (f"\n{head}" if head else ""))
+    except RuntimeError as exc:
+        print(f"[autoforge] ❌ 沙箱不可用: {exc}", file=sys.stderr)
+        return 2
     print_report(report)
     if args.json:
-        Path(args.json).write_text(json.dumps(report, ensure_ascii=False, indent=2),
-                                   encoding="utf-8")
-    print(f"[autoforge] 冒烟命令: {entry or '（未探测到，跳过）'}")
+        Path(args.json).write_text(
+            json.dumps({**report, "smoke": smoke}, ensure_ascii=False, indent=2),
+            encoding="utf-8")
     return 1 if report["timed_out"] else 0
 
 
@@ -159,28 +193,18 @@ def cmd_fix(args) -> int:
     client = LLMClient(api_key=cfg["api_key"], base_url=cfg["base_url"], model=cfg["model"])
     session_dir = create_run_dir()
     workspace = session_dir / "workspace"
-    shutil.copytree(artifact, workspace, dirs_exist_ok=True,
-                    ignore=shutil.ignore_patterns(".git", "__pycache__", ".pytest_cache"))
+    base = {"idea": None, "model": cfg["model"], "generate": None, "entry_cmd": None}
+    try:
+        shutil.copytree(artifact, workspace, dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns(".git", "__pycache__", ".pytest_cache"))
+    except Exception as exc:
+        return _loop_error_exit(session_dir, client, base, exc)
     print(f"[autoforge] 会话目录（可写副本）: {session_dir}\n[autoforge] 原目录保持只读: {artifact}")
     entry = args.entry or discover_entry(workspace)
-    try:
-        result = run_loop_structured(session_dir, workspace, entry, args.max_rounds,
-                                     LLMFixer(client), budget_tokens=args.budget_tokens,
-                                     timeout=args.timeout)
-    except Exception as exc:
-        print(f"[autoforge] ❌ 闭环异常: {exc}", file=sys.stderr)
-        _dump_events(session_dir, client)
-        final = {"idea": None, "model": cfg["model"], "generate": None,
-                 "entry_cmd": entry, "status": "loop_error", "error": str(exc),
-                 "session_dir": str(session_dir), "rounds": [], "token_total": {}}
-        _write_report(session_dir, final)
-        return STATUS_EXIT["loop_error"]
-    _dump_events(session_dir, client)
-    final = {"idea": None, "model": cfg["model"], "generate": None,
-             "entry_cmd": entry, **result, "session_dir": str(session_dir)}
-    _write_report(session_dir, final)
-    print(human_summary(final))
-    return STATUS_EXIT.get(final["status"], 1)
+    base["entry_cmd"] = entry
+    return _run_and_finalize(session_dir, client, base, workspace, entry,
+                             args.max_rounds, LLMFixer(client),
+                             budget_tokens=args.budget_tokens, timeout=args.timeout)
 
 
 def main(argv: list[str] | None = None) -> int:
