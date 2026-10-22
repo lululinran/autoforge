@@ -29,6 +29,11 @@ def test_reject_unsafe_paths():
             FilePatch(path=bad, content="x")
 
 
+def test_patch_path_backslash_normalized():
+    p = FilePatch(path="a\\b.py", content="x")
+    assert p.path == "a/b.py"
+
+
 def test_patch_list_accepts_files():
     pl = PatchList(files=[FilePatch(path="m.py", content="y = 1")])
     assert pl.files[0].content == "y = 1"

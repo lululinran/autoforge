@@ -21,6 +21,8 @@ class Failure(BaseModel):
 class TestReport(BaseModel):
     """沙箱跑完一轮测试后的完整报告。"""
 
+    __test__ = False
+
     passed: int
     total: int
     failed: int
