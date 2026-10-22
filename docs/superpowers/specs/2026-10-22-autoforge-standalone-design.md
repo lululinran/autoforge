@@ -119,7 +119,7 @@ class ProjectPlan(BaseModel):
 
 改动最小化（改包名/日志前缀）。保留全部核心语义：每次全新容器、只读挂载、容器级禁网、wheels 离线装 pytest、超时强杀、finally 必销毁、FAILURES/ERRORS 双区段解析、`failed>0 但解析为空` 的兜底 pseudo-Failure。
 
-**约束**：生成的项目仅允许标准库（写进生成 prompt 与评测口径），因为沙箱禁网无法安装第三方依赖。
+**约束**：生成的项目仅允许标准库（写进生成 prompt 与评测口径），因为沙箱禁网无法安装第三方依赖。`fix` 子命令对任意项目开放，但含第三方依赖的项目在禁网沙箱内判卷会因装不上依赖而失败——这是设计内的边界，不是缺陷。
 
 ### 5.6 loop.py — 闭环 + 两个新机制
 
@@ -153,7 +153,7 @@ runs/<YYYYmmdd-HHMMSS>/
 |---|---|---|
 | L1 可靠性 | 聚合全链路调用事件 | JSON 解析率、length 重试率、pytest 输出解析覆盖率、沙箱故障率、完整性违规数 |
 | L2 修复能力 | 种子 bug 基准：5 个干净小工具 × 4 类注入 bug = 20 case | 修复成功率（首轮/最终）、轮次分布、token/case |
-| L3 生成能力 | 8~10 个需求 × {oneshot, plan_test_code} × {无闭环, 有闭环} | 构建成功率、测试通过率、需求覆盖率、成本 |
+| L3 生成能力 | 8~10 个需求 × {oneshot, plan_test_code} × {无闭环, 有闭环} | 构建成功率（沙箱内 pytest 可收集且入口 `--help` 通过）、测试通过率、需求覆盖率（checklist 逐条）、token 成本 |
 
 - **L2 构造**：`make_bugs.py` 对干净 fixture 按类型注入——import 损坏 / 入口空文件 / 逻辑反转 / 边界缺失；`manifest.json` 记 {case, bug_type}
 - **L3 checklist**：每需求一份 `checklist.yaml`（条目源自需求的验收点，不源自生成器）；LLM-judge 初评 + 人工复核；judge 模型与被评系统模型隔离（prompt 与调用独立）
