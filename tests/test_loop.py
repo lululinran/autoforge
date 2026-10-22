@@ -69,10 +69,26 @@ def test_judge_zero_tests_collected_is_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "autoforge.loop.run_pytest_in_sandbox",
         lambda code_dir, timeout: {"passed": 0, "total": 0, "failed": 0,
-                                   "failures": [], "stdout": "no tests ran"})
+                                   "failures": [], "stdout": "no tests ran",
+                                   "exit_code": 5, "timed_out": False})
     report, smoke, failures = judge(tmp_path, None, timeout=30)
     assert [f.test_name for f in failures] == ["no_tests_collected"]
     assert failures[0].error_type == "NoTestsCollected"
+    assert smoke == {}
+
+
+def test_judge_timeout_is_pytest_timeout_not_missing_tests(tmp_path, monkeypatch):
+    """超时强杀（计数全 0）不得被误标为「缺测试」：那是死循环/挂起，不是没写测试。"""
+    monkeypatch.setattr(
+        "autoforge.loop.run_pytest_in_sandbox",
+        lambda code_dir, timeout: {"passed": 0, "total": 0, "failed": 0,
+                                   "failures": [], "stdout": "",
+                                   "stderr": "...TIMEOUT...",
+                                   "exit_code": -1, "timed_out": True})
+    report, smoke, failures = judge(tmp_path, None, timeout=30)
+    assert [f.test_name for f in failures] == ["pytest_timeout"]
+    assert failures[0].error_type == "TimeoutError"
+    assert "30s" in failures[0].message
     assert smoke == {}
 
 

@@ -262,6 +262,10 @@ def print_report(report: dict) -> None:
     print(f"结果: {report['failed']} failed / {report['passed']} passed / total {report['total']}")
     print(f"环境: {BASE_IMAGE} | 禁网 | /app 只读挂载 | 容器已销毁")
     print(line)
+    if report["total"] == 0:
+        # 零收集 ≠ 通过（超时被强杀时计数同样全 0，这条提示也优于误报「全部通过」）
+        print("未收集到任何测试用例（不算通过）")
+        return
     if not report["failures"]:
         print("全部通过")
         return

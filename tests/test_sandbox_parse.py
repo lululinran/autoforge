@@ -4,7 +4,7 @@
 pytest 报 2 errors 但解析器只认 FAILURES 区段，导致误判 all_green。
 """
 
-from autoforge.sandbox import build_report, parse_failures
+from autoforge.sandbox import build_report, parse_failures, print_report
 
 CANNED_ERRORS_STDOUT = """============================= test session starts ==============================
 platform darwin -- Python 3.11.17, pytest-9.1.1, pluggy-1.6.0
@@ -92,3 +92,23 @@ def test_parse_failures_section_and_build_report_counts():
     assert report["failed"] == 2
     assert report["total"] == 3
     assert len(report["failures"]) == 2
+
+
+CANNED_NO_TESTS_STDOUT = """============================= test session starts ==============================
+platform darwin -- Python 3.11.17, pytest-9.1.1, pluggy-1.6.0
+rootdir: /app
+collected 0 items
+
+no tests ran in 0.01s
+"""
+
+
+def test_print_report_zero_total_is_not_all_pass(capsys):
+    """零收集 ≠ 通过：print_report 不得在 total=0 时误报「全部通过」。"""
+    report = build_report(stdout=CANNED_NO_TESTS_STDOUT, stderr="", exit_code=5,
+                          duration=0.01, timed_out=False, timeout=120)
+    assert report["total"] == 0
+    print_report(report)
+    out = capsys.readouterr().out
+    assert "未收集到任何测试用例" in out
+    assert "全部通过" not in out

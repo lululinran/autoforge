@@ -111,6 +111,31 @@ def test_chat_json_bad_json_raises():
     assert c.events[-1]["error"] == "parse"
 
 
+def test_chat_json_transport_error_records_event():
+    """传输层异常也必须落一条事件（error=transport），可靠性指标不漏账。"""
+
+    class ConnErrorTransport:
+        def __init__(self):
+            chat = type("Chat", (), {})()
+            completions = type("Completions", (), {})()
+
+            def create(**kw):
+                raise RuntimeError("conn")
+
+            completions.create = create
+            chat.completions = completions
+            self.chat = chat
+
+    c = LLMClient(api_key="k", base_url="http://x", model="m",
+                  transport=ConnErrorTransport())
+    with pytest.raises(RuntimeError, match="conn"):
+        c.chat_json([{"role": "user", "content": "hi"}])
+    assert c.events[-1]["error"] == "transport"
+    assert c.events[-1]["ok"] is False
+    assert c.events[-1]["prompt_tokens"] == 0
+    assert c.events[-1]["completion_tokens"] == 0
+
+
 # ---- load_config ----
 
 def test_load_config_from_path_and_env(tmp_path, monkeypatch):

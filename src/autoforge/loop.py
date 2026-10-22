@@ -116,7 +116,15 @@ def judge(workdir: Path, entry_cmd: str | None, timeout: int) -> tuple[TestRepor
             message=f"pytest 报告 {report.failed} 个失败/错误，但未能解析出 FAILURES/ERRORS 区段",
             traceback=(report.stdout or "")[-3000:],
         ))
-    if report.total == 0:
+    if report.timed_out:
+        # 超时强杀与「缺测试」必须分开：计数全 0 只是表象，这是疑似死循环/挂起
+        failures.append(Failure(
+            test_name="pytest_timeout",
+            error_type="TimeoutError",
+            message=f"pytest 超过 {timeout}s 被沙箱强杀（疑似死循环/挂起）",
+            traceback=(report.stderr or "")[-1000:],
+        ))
+    if report.total == 0 and not report.timed_out:
         # 零收集也是失败：无测试 ≠ 通过，交给修复闭环补测试
         failures.append(Failure(
             test_name="no_tests_collected",

@@ -68,9 +68,16 @@ class LLMClient:
         budget = max_tokens or self.max_tokens
         total = {"prompt_tokens": 0, "completion_tokens": 0}
         for attempt in (1, 2):
-            resp = self._transport.chat.completions.create(
-                model=self.model, messages=messages,
-                temperature=0.0, max_tokens=budget)
+            try:
+                resp = self._transport.chat.completions.create(
+                    model=self.model, messages=messages,
+                    temperature=0.0, max_tokens=budget)
+            except Exception:
+                # 传输层失败也要落一条事件，可靠性指标（events）不漏账
+                self.events.append({"ok": False, "attempt": attempt, "finish": None,
+                                    "error": "transport",
+                                    "prompt_tokens": 0, "completion_tokens": 0})
+                raise
             choice = resp.choices[0]
             finish = choice.finish_reason
             text = choice.message.content or ""

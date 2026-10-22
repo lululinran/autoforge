@@ -153,3 +153,18 @@ def test_cmd_run_pre_deducts_generation_budget(tmp_path, monkeypatch):
     assert cli.main(["run", "idea", "--budget-tokens", "5000"]) == 0
     # 生成 1500 token 预扣：1200-1500 截断为 0；5000-1500=3500
     assert [c["budget_tokens"] for c in captured] == [0, 3500]
+
+
+def test_missing_config_returns_2(tmp_path, monkeypatch, capsys):
+    """缺配置文件：run/fix 都走友好报错 + 退出码 2，不裸抛 traceback。"""
+
+    def missing(*a, **k):
+        raise FileNotFoundError("配置不存在: /x")
+
+    monkeypatch.setattr(cli, "load_config", missing)
+    assert cli.main(["run", "idea"]) == 2
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    assert cli.main(["fix", str(proj)]) == 2
+    err = capsys.readouterr().err
+    assert "配置错误" in err and "配置不存在: /x" in err

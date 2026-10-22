@@ -111,8 +111,12 @@ def _run_and_finalize(session_dir: Path, client, base: dict, workdir: Path,
 
 
 def cmd_run(args) -> int:
-    cfg = load_config(args.config, args.model)
-    client = LLMClient(api_key=cfg["api_key"], base_url=cfg["base_url"], model=cfg["model"])
+    try:
+        cfg = load_config(args.config, args.model)
+        client = LLMClient(api_key=cfg["api_key"], base_url=cfg["base_url"], model=cfg["model"])
+    except FileNotFoundError as exc:
+        print(f"[autoforge] 配置错误: {exc}", file=sys.stderr)
+        return 2
     print(f"[autoforge] 模型: {cfg['model']} @ {cfg['base_url']}")
     session_dir = create_run_dir()
     workspace = session_dir / "workspace"
@@ -177,9 +181,12 @@ def cmd_judge(args) -> int:
         print(f"[autoforge] ❌ 沙箱不可用: {exc}", file=sys.stderr)
         return 2
     print_report(report)
+    if report["total"] == 0:
+        print("[autoforge] ⚠️ 未收集到任何测试用例（不算通过）")
     if args.json:
         Path(args.json).write_text(
-            json.dumps({**report, "smoke": smoke}, ensure_ascii=False, indent=2),
+            json.dumps({**report, "no_tests_collected": report["total"] == 0,
+                        "smoke": smoke}, ensure_ascii=False, indent=2),
             encoding="utf-8")
     return 1 if report["timed_out"] else 0
 
@@ -189,8 +196,12 @@ def cmd_fix(args) -> int:
     if not artifact.is_dir():
         print(f"[autoforge] 目录不存在: {artifact}", file=sys.stderr)
         return 2
-    cfg = load_config(args.config, args.model)
-    client = LLMClient(api_key=cfg["api_key"], base_url=cfg["base_url"], model=cfg["model"])
+    try:
+        cfg = load_config(args.config, args.model)
+        client = LLMClient(api_key=cfg["api_key"], base_url=cfg["base_url"], model=cfg["model"])
+    except FileNotFoundError as exc:
+        print(f"[autoforge] 配置错误: {exc}", file=sys.stderr)
+        return 2
     session_dir = create_run_dir()
     workspace = session_dir / "workspace"
     base = {"idea": None, "model": cfg["model"], "generate": None, "entry_cmd": None}
