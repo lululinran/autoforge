@@ -75,9 +75,9 @@ autoforge/
 
 ### 5.2 llm.py — 统一客户端
 
-- `chat_json(messages, max_tokens) → (parsed_obj, usage, meta)`；所有 LLM 调用（生成三段、修复、评测 judge）的唯一入口
-- 特性（从原 llm_fixer 抽取泛化）：围栏/裸数组 JSON 容错；`finish_reason=length` 预算翻倍重试一次；usage 归集
-- **meta 记录每次调用的 {ok, retries, parse_failed, tokens}**——可靠性层指标的数据源，零成本聚合
+- `chat_json(messages, max_tokens) → (parsed_obj, usage)`；所有 LLM 调用（生成三段、修复、评测 judge）的唯一入口
+- 特性（从原 llm_fixer 抽取泛化）：围栏/裸数组 JSON 容错；`finish_reason=length` 预算翻倍重试一次；usage 跨尝试累计归集（重试烧掉的 token 一并计入预算账本）
+- **client.events 记录每次尝试的 {ok, attempt, finish, retry?, error?, tokens}**——可靠性层指标（解析率/重试率）的数据源，零成本聚合
 - 配置：`~/.autoforge/config.yaml`（api_key / base_url / model），环境变量 `AUTOFORGE_CONFIG` 覆盖路径。**不再借用原框架的配置文件**
 
 ### 5.3 schemas.py
