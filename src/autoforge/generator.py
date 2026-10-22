@@ -6,12 +6,10 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from pydantic import BaseModel
 
 from autoforge.llm import LLMClient
-from autoforge.schemas import FilePatch, PatchList
+from autoforge.schemas import coerce_patch_list
 
 GENERATION_SYSTEM_PROMPT = """你是资深 Python 工程师，从零构建一个小型 Python CLI 工具。
 只输出严格 JSON（不带 markdown 围栏、不带任何解释文字），格式：
@@ -35,20 +33,6 @@ class GenerationResult(BaseModel):
     degraded: bool = False  # M2：plan 失败降级 oneshot 时置 True
 
 
-def _coerce_patches(obj: Any) -> PatchList:
-    files = obj.get("files") if isinstance(obj, dict) else obj
-    if not isinstance(files, list):
-        raise ValueError(f"生成输出缺少可用的 files 列表: {str(obj)[:200]}")
-    if not files:
-        raise ValueError(f"生成输出 files 列表为空: {str(obj)[:200]}")
-    if not all(isinstance(f, dict) for f in files):
-        raise ValueError(f"files 列表元素必须是对象: {str(files)[:200]}")
-    patches = PatchList(files=[FilePatch(**f) for f in files])
-    if len({p.path for p in patches.files}) != len(patches.files):
-        raise ValueError(f"生成输出包含重复路径: {sorted(p.path for p in patches.files)[:20]}")
-    return patches
-
-
 def generate_oneshot(idea: str, client: LLMClient) -> GenerationResult:
     """单发策略：一次调用产出全部文件（含测试）。"""
     messages = [
@@ -56,7 +40,7 @@ def generate_oneshot(idea: str, client: LLMClient) -> GenerationResult:
         {"role": "user", "content": f"# 需求\n{idea}\n\n请输出完整项目 JSON。"},
     ]
     obj, usage = client.chat_json(messages)
-    patches = _coerce_patches(obj)
+    patches = coerce_patch_list(obj)
     return GenerationResult(
         files={p.path: p.content for p in patches.files},
         strategy="oneshot", usage=usage)

@@ -2,8 +2,11 @@
 
 from pathlib import Path
 
-from autoforge.loop import LLMFixer, build_tree, collect_context, run_loop_structured, smoke_failure
-from autoforge.schemas import Failure, FilePatch, PatchList, TestReport
+import pytest
+
+from autoforge.loop import (LLMFixer, build_tree, collect_context, judge,
+                            run_loop_structured, smoke_failure)
+from autoforge.schemas import Failure, FilePatch, FixRequest, PatchList, TestReport
 
 
 def _report(failed=0, passed=2):
@@ -45,10 +48,59 @@ def test_collect_context_caps_file_count(tmp_path):
     assert len(ctx) == 30
 
 
+def test_collect_context_filters_ghost_paths_before_cap(tmp_path):
+    """幽灵路径（traceback 提到但不存在）不得在截断时挤掉真实文件。"""
+    (tmp_path / "zz_real.py").write_text("real = 1\n", encoding="utf-8")
+    ghosts = " ".join(f"ghost{i:02d}.py" for i in range(35))
+    fail = Failure(test_name="t", error_type="Error", message="m", traceback=ghosts)
+    ctx = collect_context(tmp_path, [fail])
+    assert list(ctx) == ["zz_real.py"]
+
+
 def test_build_tree_sorted(tmp_path):
     (tmp_path / "b.py").write_text("", encoding="utf-8")
     (tmp_path / "a.py").write_text("", encoding="utf-8")
     assert build_tree(tmp_path).splitlines() == ["a.py", "b.py"]
+
+
+# ---- judge（run_pytest_in_sandbox 打桩） ----
+
+def test_judge_zero_tests_collected_is_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "autoforge.loop.run_pytest_in_sandbox",
+        lambda code_dir, timeout: {"passed": 0, "total": 0, "failed": 0,
+                                   "failures": [], "stdout": "no tests ran"})
+    report, smoke, failures = judge(tmp_path, None, timeout=30)
+    assert [f.test_name for f in failures] == ["no_tests_collected"]
+    assert failures[0].error_type == "NoTestsCollected"
+    assert smoke == {}
+
+
+# ---- LLMFixer.request_fix（client 打桩） ----
+
+class _StubClient:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def chat_json(self, messages):
+        return self.payload, {"prompt_tokens": 3, "completion_tokens": 4}
+
+
+def _fix_request():
+    return FixRequest(target_files=[], failure_summary="boom", retry_round=1)
+
+
+def test_fixer_request_fix_accepts_bare_list():
+    fixer = LLMFixer(_StubClient([{"path": "mod.py", "content": "x = 1"}]))
+    patches, usage = fixer.request_fix(_fix_request(), {}, "a.py")
+    assert [p.path for p in patches.files] == ["mod.py"]
+    assert usage == {"prompt_tokens": 3, "completion_tokens": 4}
+
+
+def test_fixer_request_fix_rejects_missing_files():
+    fixer = LLMFixer(_StubClient({"nope": 1}))
+    with pytest.raises(ValueError, match="files"):
+        fixer.request_fix(_fix_request(), {}, "")
 
 
 # ---- run_loop_structured（judge 打桩） ----

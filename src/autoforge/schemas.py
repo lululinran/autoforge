@@ -4,7 +4,7 @@ TestReport/Failure/FixRequest：沙箱判卷结果与修复请求；
 FilePatch/PatchList：LLM 提案的标准文件补丁格式（生成与修复共用同一原语）。
 """
 
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -65,3 +65,18 @@ class FilePatch(BaseModel):
 
 class PatchList(BaseModel):
     files: list[FilePatch]
+
+
+def coerce_patch_list(obj: Any) -> PatchList:
+    """把 LLM 输出（{"files": [...]} 或裸数组）规整为 PatchList，统一守卫。"""
+    files = obj.get("files") if isinstance(obj, dict) else obj
+    if not isinstance(files, list):
+        raise ValueError(f"输出缺少可用的 files 列表: {str(obj)[:200]}")
+    if not files:
+        raise ValueError(f"输出 files 列表为空: {str(obj)[:200]}")
+    if not all(isinstance(f, dict) for f in files):
+        raise ValueError(f"files 列表元素必须是对象: {str(files)[:200]}")
+    patches = PatchList(files=[FilePatch(**f) for f in files])
+    if len({p.path for p in patches.files}) != len(patches.files):
+        raise ValueError(f"输出包含重复路径: {sorted(p.path for p in patches.files)[:20]}")
+    return patches

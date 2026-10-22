@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 
 from autoforge.llm import LLMClient
-from autoforge.schemas import Failure, FilePatch, FixRequest, PatchList, TestReport
+from autoforge.schemas import Failure, FixRequest, PatchList, TestReport, coerce_patch_list
 from autoforge.sandbox import run_in_sandbox, run_pytest_in_sandbox
 
 MAX_CONTEXT_LINES = 400
@@ -50,10 +50,7 @@ class LLMFixer:
             {"role": "user", "content": self.build_user_prompt(fix_request, context_files, tree)},
         ]
         obj, usage = self.client.chat_json(messages)
-        files = obj["files"] if isinstance(obj, dict) else obj
-        if not isinstance(files, list):
-            raise ValueError(f"修复输出缺少可用的 files 列表: {str(obj)[:200]}")
-        return PatchList(files=[FilePatch(**f) for f in files]), usage
+        return coerce_patch_list(obj), usage
 
 
 def _norm_path(p: str) -> str:
@@ -69,7 +66,7 @@ def build_tree(workdir: Path) -> str:
 
 
 def collect_context(workdir: Path, failures: list[Failure]) -> dict[str, str]:
-    """收集失败 traceback 里提到的文件 + main.py + todo_cli 包，作为修复上下文。"""
+    """收集失败 traceback 里提到的文件 + 全项目 .py 扫描，作为修复上下文。"""
     wanted: set[str] = set()
     for f in failures:
         for m in re.finditer(r"[\w./-]+\.py", f.traceback + " " + f.message):
@@ -79,12 +76,11 @@ def collect_context(workdir: Path, failures: list[Failure]) -> dict[str, str]:
         if "__pycache__" not in p.parts:
             wanted.add(str(p.relative_to(workdir)))
 
+    # 先过滤幽灵路径（traceback 提到但不存在，如标准库/容器路径），再截断上限，
+    # 避免幽灵条目把真实文件挤出 MAX_CONTEXT_FILES 名额
     context: dict[str, str] = {}
-    for rel in sorted(wanted)[:MAX_CONTEXT_FILES]:
-        f = workdir / rel
-        if not f.is_file():
-            continue
-        lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
+    for rel in [r for r in sorted(wanted) if (workdir / r).is_file()][:MAX_CONTEXT_FILES]:
+        lines = (workdir / rel).read_text(encoding="utf-8", errors="replace").splitlines()
         if len(lines) > MAX_CONTEXT_LINES:
             content = "\n".join(lines[:MAX_CONTEXT_LINES]) + f"\n# ...(截断，共 {len(lines)} 行)"
         else:
@@ -120,6 +116,14 @@ def judge(workdir: Path, entry_cmd: str | None, timeout: int) -> tuple[TestRepor
             message=f"pytest 报告 {report.failed} 个失败/错误，但未能解析出 FAILURES/ERRORS 区段",
             traceback=(report.stdout or "")[-3000:],
         ))
+    if report.total == 0:
+        # 零收集也是失败：无测试 ≠ 通过，交给修复闭环补测试
+        failures.append(Failure(
+            test_name="no_tests_collected",
+            error_type="NoTestsCollected",
+            message="pytest 未收集到任何用例（项目缺少测试）",
+            traceback=report.stdout[-1000:],
+        ))
     smoke: dict = {}
     if entry_cmd:
         smoke = run_in_sandbox(workdir, entry_cmd, timeout=timeout)
@@ -144,11 +148,11 @@ def save_round_report(session_dir: Path, rnd: int, report: TestReport, smoke: di
     return out
 
 
-def apply_patches(session_dir: Path, patches: PatchList) -> list[str]:
-    """把补丁写入会话副本目录（原产物目录永不触碰），返回写入的相对路径。"""
+def apply_patches(workdir: Path, patches: PatchList) -> list[str]:
+    """把补丁写入工作目录，返回写入的相对路径。"""
     written = []
     for f in patches.files:
-        target = session_dir / f.path
+        target = workdir / f.path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(f.content, encoding="utf-8")
         written.append(f.path)
