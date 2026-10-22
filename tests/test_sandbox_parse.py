@@ -1,4 +1,4 @@
-"""executor_sandbox 解析层的离线测试（不起 Docker）。
+"""sandbox 解析层的离线测试（不起 Docker）。
 
 用真实收集期失败（ERRORS 区段）的输出形状做样本——2026-10-15 生产事故：
 pytest 报 2 errors 但解析器只认 FAILURES 区段，导致误判 all_green。
@@ -49,4 +49,46 @@ def test_build_report_counts_errors_without_failures_section():
     assert report["passed"] == 0
     assert report["total"] == 2
     # 关键回归：解析器现在能从 ERRORS 区段取出失败块，judge() 不会再误判 all_green
+    assert len(report["failures"]) == 2
+
+
+CANNED_FAILURES_STDOUT = """============================= test session starts ==============================
+platform darwin -- Python 3.11.17, pytest-9.1.1, pluggy-1.6.0
+rootdir: /app
+collected 3 items
+
+tests/test_calc.py F.                                                      [ 66%]
+tests/test_config.py F                                                     [100%]
+
+=================================== FAILURES ===================================
+________________________________ test_add_numbers _______________________________
+tests/test_calc.py:12: in test_add_numbers
+>       assert add(2, 3) == 6
+E       assert 5 == 6
+_______________________________ test_parse_config _______________________________
+tests/test_config.py:21: in test_parse_config
+>       cfg = parse_config("bad.toml")
+E       ValueError: bad
+=========================== short test summary info ============================
+FAILED tests/test_calc.py::test_add_numbers - assert 5 == 6
+FAILED tests/test_config.py::test_parse_config - ValueError: bad
+1 passed, 2 failed in 0.03s
+"""
+
+
+def test_parse_failures_section_and_build_report_counts():
+    failures = parse_failures(CANNED_FAILURES_STDOUT)
+    assert len(failures) == 2
+    # 普通 assert 失败：E 行不带类型名，走 assert 启发式归为 AssertionError
+    assert failures[0]["test_name"] == "test_add_numbers"
+    assert failures[0]["error_type"] == "AssertionError"
+    # 显式异常：E 行带「类型: 信息」，直接取 ValueError / bad
+    assert failures[1]["test_name"] == "test_parse_config"
+    assert failures[1]["error_type"] == "ValueError"
+    assert failures[1]["message"] == "bad"
+    report = build_report(stdout=CANNED_FAILURES_STDOUT, stderr="", exit_code=1,
+                          duration=0.5, timed_out=False, timeout=120)
+    assert report["passed"] == 1
+    assert report["failed"] == 2
+    assert report["total"] == 3
     assert len(report["failures"]) == 2

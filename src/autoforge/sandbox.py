@@ -12,10 +12,10 @@
 输出：
   - 人类可读报告：失败测试名 + 报错类型 + traceback；
   - 可选 --json <path>：结构化结果，字段与 schemas.TestReport 对齐，
-    供 Phase 2 直接构造 TestReport 回传给 LLM。
+    供修复闭环直接构造 TestReport 回传给 LLM。
 
 用法：
-  python executor_sandbox.py <代码目录> [--timeout 120] [--json out.json]
+  python -m autoforge.sandbox <代码目录> [--timeout 120] [--json out.json]
 
 退出码：
   0 = 沙箱流程完整，失败信息被「捕获」（哪怕测试本身失败）；
