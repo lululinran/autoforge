@@ -2,7 +2,7 @@
 
 设计要点：
   - 所有模型调用（生成/修复/评测 judge）都走 chat_json，可靠性指标的数据源
-    （self.events：每次尝试一条 {ok, retry, finish, tokens}）自动产生；
+    （self.events：每次尝试一条 {ok, retry/error, finish, tokens}）自动产生；
   - 宽松 JSON 解析：容忍 ```json 围栏与裸数组；
   - finish_reason=length（推理模型烧尽预算）→ max_tokens 翻倍重试一次；
   - transport 可注入，离线测试不发真实请求。
@@ -51,7 +51,8 @@ class LLMClient:
                  timeout: int = 300, max_tokens: int = 16384, transport=None):
         if transport is None:
             from openai import OpenAI  # 延迟导入，离线测试不受影响
-            transport = OpenAI(api_key=api_key, base_url=base_url, timeout=timeout)
+            transport = OpenAI(api_key=api_key, base_url=base_url, timeout=timeout,
+                               max_retries=2)
         self._transport = transport
         self.model = model
         self.max_tokens = max_tokens
@@ -59,11 +60,13 @@ class LLMClient:
 
     def chat_json(self, messages: list[dict], max_tokens: int | None = None
                   ) -> tuple[Any, dict]:
-        """一次结构化调用，返回 (解析后的对象, usage)。
+        """一次结构化调用，返回 (解析后的对象, 跨尝试累计 usage)。
 
-        每次尝试往 self.events 追加一条；length 截断自动翻倍预算重试一次。
+        每次尝试往 self.events 追加一条（含该次尝试自己的 token 数与失败种类）；
+        length 截断自动翻倍预算重试一次，重试烧掉的 token 计入返回的累计 usage。
         """
         budget = max_tokens or self.max_tokens
+        total = {"prompt_tokens": 0, "completion_tokens": 0}
         for attempt in (1, 2):
             resp = self._transport.chat.completions.create(
                 model=self.model, messages=messages,
@@ -73,6 +76,8 @@ class LLMClient:
             text = choice.message.content or ""
             usage = {"prompt_tokens": getattr(resp.usage, "prompt_tokens", 0) or 0,
                      "completion_tokens": getattr(resp.usage, "completion_tokens", 0) or 0}
+            total["prompt_tokens"] += usage["prompt_tokens"]
+            total["completion_tokens"] += usage["completion_tokens"]
             ev = {"ok": False, "attempt": attempt, "finish": finish, **usage}
 
             if text.strip():
@@ -84,12 +89,13 @@ class LLMClient:
                         self.events.append(ev)
                         budget *= 2
                         continue
+                    ev["error"] = "parse"
                     self.events.append(ev)
                     raise ValueError(
                         f"解析 LLM JSON 失败: {exc}\n输出开头 200 字符: {text[:200]!r}")
                 ev["ok"] = True
                 self.events.append(ev)
-                return obj, usage
+                return obj, total
 
             reasoning_len = len(getattr(choice.message, "reasoning_content", "") or "")
             if attempt == 1 and finish == "length":
@@ -97,6 +103,7 @@ class LLMClient:
                 self.events.append(ev)
                 budget *= 2
                 continue
+            ev["error"] = "empty"
             self.events.append(ev)
             raise ValueError(
                 f"LLM 返回空 content: finish_reason={finish}, "

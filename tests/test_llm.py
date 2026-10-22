@@ -1,7 +1,5 @@
 """llm 统一客户端离线测试：宽松 JSON 解析、length 重试、事件记录、配置加载。"""
 
-import json
-
 import pytest
 
 from autoforge.llm import LLMClient, load_config, parse_json_loose
@@ -83,12 +81,14 @@ def test_chat_json_length_retry_doubles_budget():
         FakeResponse('{"files": [{"path": "a.py", "con', finish="length"),
         FakeResponse('{"files": []}'),
     ])
-    obj, _ = c.chat_json([{"role": "user", "content": "hi"}], max_tokens=1000)
+    obj, usage = c.chat_json([{"role": "user", "content": "hi"}], max_tokens=1000)
     assert obj == {"files": []}
     calls = c._transport.chat.completions.calls
     assert calls[0]["max_tokens"] == 1000
     assert calls[1]["max_tokens"] == 2000
     assert c.events[0]["ok"] is False and c.events[0]["retry"] == "length_parse"
+    assert usage == {"prompt_tokens": 200, "completion_tokens": 100}
+    assert c.events[1]["ok"] is True
 
 
 def test_chat_json_empty_content_with_reasoning_retries_then_raises():
@@ -99,12 +99,14 @@ def test_chat_json_empty_content_with_reasoning_retries_then_raises():
     with pytest.raises(ValueError, match="空 content"):
         c.chat_json([{"role": "user", "content": "hi"}])
     assert len(c.events) == 2
+    assert c.events[-1]["error"] == "empty"
 
 
 def test_chat_json_bad_json_raises():
     c = make_client([FakeResponse("not json at all")])
     with pytest.raises(ValueError, match="解析 LLM JSON 失败"):
         c.chat_json([{"role": "user", "content": "hi"}])
+    assert c.events[-1]["error"] == "parse"
 
 
 # ---- load_config ----
