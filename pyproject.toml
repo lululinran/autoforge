@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autoforge"
+dynamic = ["version"]
+description = "一句话需求 → 生成 → 禁网沙箱验收 → LLM 修复闭环"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "openai>=1.40",
+    "docker>=7",
+    "requests>=2.26",
+    "pydantic>=2.7",
+    "pyyaml>=6",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+autoforge = "autoforge.cli:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "autoforge.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
