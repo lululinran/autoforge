@@ -9,7 +9,7 @@ from tests.test_llm import FakeResponse, make_client
 
 
 def test_system_prompt_states_hard_constraints():
-    for kw in ("标准库", "pytest", "--help", "完整", "扁平", "3.11"):
+    for kw in ("标准库", "pytest", "--help", "完整", "扁平", "3.11", "main.py"):
         assert kw in GENERATION_SYSTEM_PROMPT
 
 
